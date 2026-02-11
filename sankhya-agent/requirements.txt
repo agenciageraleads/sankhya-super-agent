@@ -1,3 +1,8 @@
+#
+# Dependencies installable via pip.
+# Stdlib modules (re, sqlite3, typing, logging, importlib, inspect, pkgutil, etc.)
+# must NOT be listed here because they are shipped with Python.
+#
 mcp
 requests
 python-dotenv
@@ -5,10 +10,3 @@ streamlit
 plotly
 pandas
 openai
-pkgutil
-importlib
-inspect
-re
-logging
-sqlite3
-typing

@@ -32,6 +32,23 @@ logger = logging.getLogger("ssa-tools")
 # Caminho da knowledge base
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge")
 
+def _env_truthy(name: str) -> bool:
+    val = (os.getenv(name) or "").strip().lower()
+    return val in {"1", "true", "yes", "y", "on"}
+
+def _parse_csv_env(name: str) -> List[str]:
+    raw = os.getenv(name) or ""
+    items = [x.strip() for x in raw.split(",")]
+    return [x for x in items if x]
+
+def _write_guard_blocked_message(action: str, hint: str = "") -> str:
+    extra = f"\n\n{hint}" if hint else ""
+    return (
+        f"❌ BLOQUEADO: operação de escrita ({action}) desabilitada por padrão.\n\n"
+        "Para habilitar, defina `SSA_ENABLE_WRITE=1` e configure uma allowlist apropriada."
+        f"{extra}"
+    )
+
 
 # =============================================================================
 # VALIDAÇÃO DE SEGURANÇA SQL (CAMADA CRÍTICA)
@@ -322,11 +339,87 @@ def test_connection() -> str:
 # NOVAS FERRAMENTAS UNIVERSAIS (PHASE 2)
 # =============================================================================
 
+def get_daily_sales_report(days: int = 7, codemp_csv: str = "") -> str:
+    """
+    Gera relatório de vendas diárias (TGFCAB) com filtro opcional de empresas.
+    Use para pedidos como "vendas de hoje", "relatório diário", "empresa 1 e 5".
+    """
+    try:
+        days = int(days)
+    except Exception:
+        return "❌ Parâmetro `days` inválido. Informe um número inteiro."
+
+    if days < 1:
+        days = 1
+    if days > 60:
+        days = 60
+
+    where_emp = ""
+    scope_text = "Todas as empresas"
+    if codemp_csv and codemp_csv.strip():
+        cleaned = re.sub(r"[^0-9,]", "", codemp_csv)
+        emp_ids = [x for x in cleaned.split(",") if x]
+        if not emp_ids:
+            return "❌ `codemp_csv` inválido. Exemplo esperado: `1,5`."
+        where_emp = f" AND CODEMP IN ({', '.join(emp_ids)})"
+        scope_text = f"Empresas: {', '.join(emp_ids)}"
+
+    sql = f"""
+    SELECT
+        TO_CHAR(TRUNC(DTNEG), 'YYYY-MM-DD') AS "Data",
+        CODEMP AS "Empresa",
+        COUNT(*) AS "QtdNotas",
+        ROUND(SUM(VLRNOTA), 2) AS "TotalVendas"
+    FROM TGFCAB
+    WHERE STATUSNOTA = 'L'
+      AND TIPMOV = 'V'
+      AND TRUNC(DTNEG) >= TRUNC(SYSDATE) - {days - 1}
+      {where_emp}
+    GROUP BY TRUNC(DTNEG), CODEMP
+    ORDER BY TRUNC(DTNEG) DESC, CODEMP
+    """
+
+    try:
+        rows = sankhya.execute_query(sql)
+        if not rows:
+            return "Nenhuma venda encontrada para o período/filtro informado."
+
+        total = sum(float(r.get("TotalVendas") or 0) for r in rows)
+        qtd_notas = sum(int(r.get("QtdNotas") or 0) for r in rows)
+        header = (
+            f"### 📅 Relatório de Vendas Diárias\n"
+            f"- Período: últimos **{days} dia(s)**\n"
+            f"- Escopo: **{scope_text}**\n"
+            f"- Notas: **{qtd_notas}**\n"
+            f"- Total: **R$ {total:,.2f}**\n\n"
+        )
+        return header + format_as_markdown_table(rows)
+    except Exception as e:
+        return f"❌ Erro ao gerar relatório diário: {str(e)}"
+
 def call_sankhya_service(service_name: str, request_body: dict) -> str:
     """
     Executa qualquer serviço (Service Name) da API do Sankhya.
     Útil para operações específicas não cobertas por outras ferramentas (ex: faturar nota, cancelar).
     """
+    if not _env_truthy("SSA_ENABLE_WRITE"):
+        return _write_guard_blocked_message(
+            action=f"call_sankhya_service -> {service_name}",
+            hint="Se for realmente necessário, permita serviços específicos via `SSA_SERVICE_ALLOWLIST` (CSV).",
+        )
+
+    allowed_services = set(_parse_csv_env("SSA_SERVICE_ALLOWLIST"))
+    if not allowed_services:
+        return _write_guard_blocked_message(
+            action=f"call_sankhya_service -> {service_name}",
+            hint="Allowlist vazia: defina `SSA_SERVICE_ALLOWLIST=ServiceA,ServiceB` para liberar explicitamente.",
+        )
+    if service_name not in allowed_services:
+        return (
+            f"❌ BLOQUEADO: serviço `{service_name}` não está na allowlist.\n\n"
+            f"Allowlist atual (`SSA_SERVICE_ALLOWLIST`): {', '.join(sorted(allowed_services))}"
+        )
+
     try:
         result = sankhya.call_service(service_name, request_body)
         return f"✅ Serviço `{service_name}` executado com sucesso:\n\n```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
@@ -401,6 +494,24 @@ def save_record(entity_name: str, values: dict, primary_key: dict = None) -> str
         values: Dicionário com campos e valores a salvar { "NOMEPARC": "Novo Cliente", ... }.
         primary_key: Dicionário com a PK (se for Update) { "CODPARC": 100 }. Se vazio, é Insert.
     """
+    if not _env_truthy("SSA_ENABLE_WRITE"):
+        return _write_guard_blocked_message(
+            action=f"save_record -> {entity_name}",
+            hint="Se for realmente necessário, permita entidades específicas via `SSA_WRITE_ENTITY_ALLOWLIST` (CSV).",
+        )
+
+    allowed_entities = set(_parse_csv_env("SSA_WRITE_ENTITY_ALLOWLIST"))
+    if not allowed_entities:
+        return _write_guard_blocked_message(
+            action=f"save_record -> {entity_name}",
+            hint="Allowlist vazia: defina `SSA_WRITE_ENTITY_ALLOWLIST=EntidadeA,EntidadeB` para liberar explicitamente.",
+        )
+    if entity_name not in allowed_entities:
+        return (
+            f"❌ BLOQUEADO: entidade `{entity_name}` não está na allowlist.\n\n"
+            f"Allowlist atual (`SSA_WRITE_ENTITY_ALLOWLIST`): {', '.join(sorted(allowed_entities))}"
+        )
+
     try:
         # Prepara os campos e valores
         # A API DatasetSP.save espera arrays alinhados de fields e values
@@ -586,7 +697,8 @@ def register_tools(mcp=None):
         run_sql_select, get_table_columns, get_stock_info, get_partner_info,
         get_invoice_header, get_invoice_items, search_docs, list_tables,
         test_connection, call_sankhya_service, load_records, save_record,
-        search_solutions, describe_entity, generate_chart_report
+        search_solutions, describe_entity, generate_chart_report,
+        get_daily_sales_report
     ]
     for tool_func in core_tools:
         GLOBAL_TOOL_REGISTRY[tool_func.__name__] = tool_func
@@ -634,11 +746,16 @@ def get_openai_tools_schema() -> List[Dict]:
                 p_type = "integer"
             elif p_param.annotation == List[str] or p_param.annotation == list:
                 p_type = "array"
-                
-            params["properties"][p_name] = {
+
+            prop_schema = {
                 "type": p_type,
-                "description": f"Parâmetro {p_name}" # Idealmente extrair do docstring
+                "description": f"Parâmetro {p_name}"  # Idealmente extrair do docstring
             }
+            # OpenAI exige "items" quando o tipo é array.
+            if p_type == "array":
+                prop_schema["items"] = {"type": "string"}
+
+            params["properties"][p_name] = prop_schema
             if p_param.default == inspect.Parameter.empty:
                 params["required"].append(p_name)
         

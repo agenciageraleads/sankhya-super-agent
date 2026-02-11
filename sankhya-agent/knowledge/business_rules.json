@@ -77,6 +77,12 @@
             "condition": "CODNAT = 3012200 AND VLRDESDOB > 5000",
             "description": "Detectado valor alto em Auxílio Alimentação. Sugestão: Validar se este valor está correto ou se deve ser reclassificado.",
             "status": "pending_approval"
+        },
+        {
+            "id": "oracle_date_functions_only",
+            "condition": "SQL com funções MySQL/Postgres de data (CURDATE, DATE_TRUNC) em ambiente Oracle",
+            "description": "Ao gerar SQL para Sankhya/Oracle, usar TRUNC(SYSDATE), SYSDATE e TO_CHAR; nunca usar CURDATE/DATE_TRUNC.",
+            "status": "pending_approval"
         }
     ]
 }

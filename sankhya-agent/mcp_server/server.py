@@ -3,7 +3,12 @@ Sankhya Super Agent — Servidor MCP
 Entry point do FastMCP. Registra as ferramentas definidas em tools.py.
 """
 from mcp.server.fastmcp import FastMCP
-from tools import register_tools
+try:
+    # When executed as a package module: python -m mcp_server.server
+    from .tools import register_tools
+except Exception:
+    # Fallback for direct execution from within the folder.
+    from tools import register_tools
 
 # Inicializa o servidor MCP
 mcp = FastMCP("Sankhya Super Agent")
