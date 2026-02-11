@@ -73,12 +73,23 @@ def _strip_string_literals(sql: str) -> str:
     """Remove conteúdo entre aspas simples para não gerar falsos positivos."""
     return re.sub(r"'[^']*'", "''", sql)
 
+def _normalize_sql_for_gateway(sql: str) -> str:
+    """
+    Normaliza SQL para execução no DbExplorer:
+    - remove espaços extras nas bordas
+    - remove ';' apenas quando estiver no final
+    """
+    cleaned = sql.strip()
+    while cleaned.endswith(";"):
+        cleaned = cleaned[:-1].rstrip()
+    return cleaned
+
 
 def validate_sql_safety(sql: str) -> Optional[str]:
     """
     Valida se a query SQL é segura para execução (somente leitura).
     """
-    cleaned = sql.strip()
+    cleaned = _normalize_sql_for_gateway(sql)
 
     # Camada 1: Deve começar com SELECT ou WITH
     upper_start = cleaned.upper().lstrip()
@@ -109,12 +120,13 @@ def validate_sql_safety(sql: str) -> Optional[str]:
 
 def run_sql_select(sql: str) -> str:
     """Executa SELECT com validação de segurança."""
-    error = validate_sql_safety(sql)
+    sql_to_run = _normalize_sql_for_gateway(sql)
+    error = validate_sql_safety(sql_to_run)
     if error:
         return error
 
     try:
-        result = sankhya.execute_query(sql)
+        result = sankhya.execute_query(sql_to_run)
         if not result:
             return "A consulta não retornou registros."
         return f"**{len(result)} registro(s) encontrado(s):**\n\n{format_as_markdown_table(result)}"
@@ -652,11 +664,12 @@ def generate_chart_report(sql: str, chart_type: str = "bar", title: str = "Relat
     Gera um gráfico visual (BI) baseado em uma consulta SQL.
     Tipos suportados: 'bar', 'line', 'pie', 'scatter'.
     """
-    error = validate_sql_safety(sql)
+    sql_to_run = _normalize_sql_for_gateway(sql)
+    error = validate_sql_safety(sql_to_run)
     if error: return error
 
     try:
-        data = sankhya.execute_query(sql)
+        data = sankhya.execute_query(sql_to_run)
         if not data:
             return "A consulta não retornou dados para gerar o gráfico."
         
@@ -719,6 +732,9 @@ def register_tools(mcp=None):
             importlib.reload(module)
             
             for name, func in inspect.getmembers(module, inspect.isfunction):
+                # Só expõe funções definidas no próprio módulo da skill.
+                if func.__module__ != module.__name__:
+                    continue
                 if not name.startswith("_") and func.__doc__:
                     #print(f"DEBUG: Registrando {name} de {module_name}")
                     GLOBAL_TOOL_REGISTRY[name] = func

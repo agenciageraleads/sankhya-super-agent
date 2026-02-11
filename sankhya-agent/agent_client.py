@@ -56,6 +56,41 @@ def _run_auto_learning(function_name: str, function_args: dict, function_respons
     except Exception as e:
         logger.warning(f"Falha ao registrar auto-learning ({rule_id}): {str(e)}")
 
+
+def _sanitize_sql_tail(sql: str) -> str:
+    cleaned = (sql or "").strip()
+    while cleaned.endswith(";"):
+        cleaned = cleaned[:-1].rstrip()
+    return cleaned
+
+
+def _retry_tool_if_recoverable(function_name: str, function_args: dict, function_response: str, tool_function):
+    """
+    Auto-correção silenciosa para erros recuperáveis.
+    Ex.: SQL bloqueada apenas por ';' no final.
+    """
+    resp = (function_response or "").lower()
+    if function_name not in {"run_sql_select", "generate_chart_report"}:
+        return function_response
+    if "ponto-e-vírgula detectado" not in resp and "apenas um statement por vez" not in resp:
+        return function_response
+
+    sql = function_args.get("sql")
+    if not isinstance(sql, str):
+        return function_response
+
+    fixed_sql = _sanitize_sql_tail(sql)
+    if fixed_sql == sql:
+        return function_response
+
+    new_args = dict(function_args)
+    new_args["sql"] = fixed_sql
+    try:
+        logger.info(f"Auto-correção SQL aplicada em {function_name}: removido ';' final e reexecutando.")
+        return tool_function(**new_args)
+    except Exception:
+        return function_response
+
 def get_system_prompt():
     """Gera o prompt do sistema com a lista atual de ferramentas disponíveis."""
     tools_list = "\n".join([f"- `{name}`: {func.__doc__.strip().split('\\n')[0] if func.__doc__ else 'Sem descrição'}" 
@@ -73,6 +108,7 @@ Sua missão é ajudar usuários (diretores, gerentes, suporte) a obter informaç
 5. **Business:** Você atua na empresa "Portal Distribuidora / B&B".
 6. **Relatórios diários:** Para pedidos de "vendas diárias", "vendas de hoje" ou "empresa X e Y", prefira a ferramenta `get_daily_sales_report` antes de SQL livre.
 7. **Multiempresa:** Em pedidos de indicadores/relatórios que dependem de empresa, sempre confirmar escopo (empresa específica ou todas). Se o usuário não escolher, responda com todas as empresas e explicite essa premissa.
+8. **SQL no Sankhya:** Nunca finalize SQL com ponto-e-vírgula (`;`). Gere apenas um único statement.
 
 **Ferramentas Ativas no Momento:**
 {tools_list}
@@ -175,6 +211,8 @@ def run_conversation(messages):
     """
     # Se não tem API Key, roda simulação local
     if not client:
+        # Garante hot-reload das skills mesmo sem OpenAI.
+        register_tools()
         # Pega a última mensagem do usuário na lista
         for m in reversed(messages):
             if m["role"] == "user":
@@ -187,6 +225,8 @@ def run_conversation(messages):
 
     # Fluxo OpenAI Real
     try:
+        # Hot-reload real: sempre reindexa ferramentas/skills antes de cada rodada.
+        register_tools()
         # Pede os schemas e mapas atuais (suporta Hot Reload)
         system_prompt = get_system_prompt()
         tools_schema = get_tools_schema()
@@ -220,6 +260,14 @@ def run_conversation(messages):
                     function_response = tool_function(**function_args)
                 except Exception as e:
                     function_response = f"Erro na execução da ferramenta: {str(e)}"
+
+                # Se der erro recuperável, tenta corrigir e reexecutar sem expor o erro bruto ao usuário.
+                function_response = _retry_tool_if_recoverable(
+                    function_name=function_name,
+                    function_args=function_args,
+                    function_response=str(function_response),
+                    tool_function=tool_function,
+                )
 
                 # Aprendizado automático pós-execução de ferramenta.
                 _run_auto_learning(function_name, function_args, str(function_response), available_functions)
