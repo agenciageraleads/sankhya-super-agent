@@ -1,0 +1,14 @@
+mcp
+requests
+python-dotenv
+streamlit
+plotly
+pandas
+openai
+pkgutil
+importlib
+inspect
+re
+logging
+sqlite3
+typing

@@ -1,0 +1,82 @@
+{
+    "group_structure": {
+        "ATACADO": {
+            "name": "Atacado de Materiais Elétricos",
+            "emp_ids": [
+                1,
+                5,
+                7
+            ],
+            "notes": "Empresa 5 encerrada em Fev/2026, faturamento migrado para a 1."
+        },
+        "INDUSTRIA": {
+            "name": "Indústria",
+            "emp_ids": [
+                2,
+                6
+            ],
+            "notes": "Produção de itens para o atacado."
+        },
+        "HOLDING": {
+            "name": "Holding",
+            "emp_ids": [
+                4
+            ],
+            "notes": "Gestão de ativos."
+        },
+        "MAO_DE_OBRA": {
+            "name": "Serviços de Mão de Obra (Intercompany)",
+            "emp_ids": [
+                3
+            ],
+            "notes": "Empresa no Simples Nacional que provê equipe para as demais."
+        }
+    },
+    "mapping_rules": [
+        {
+            "id": "personnel_cost_p3",
+            "condition": "CODPARC = 3",
+            "target_category": "Custo de Pessoal (Folha)",
+            "original_category_hint": "Serviço de Escritório",
+            "description": "Todo pagamento ao parceiro 3 deve ser tratado como custo de folha de pagamento."
+        },
+        {
+            "id": "revenue_adjustment_leak",
+            "condition": "CODNAT = 1010100 AND RECDESP = -1",
+            "exception": "HISTORICO LIKE '%Compensação%'",
+            "warning": "Lançamento de saída na natureza de receita detectado. Se não for uma compensação de crédito, polui a receita bruta.",
+            "action": "flag_as_net_adjustment"
+        },
+        {
+            "id": "exclude_top_900_finance",
+            "condition": "CODTIPOPER = 900",
+            "description": "TOP 900 gera orçamentos para cálculo de juros de cartão. Deve ser EXCLUÍDA de relatórios financeiros reais para não inflar o faturamento ou despesa.",
+            "action": "always_filter_out"
+        }
+    ],
+    "data_quality_checks": {
+        "max_unclassified_threshold_pct": 5.0,
+        "max_unclassified_threshold_absolute": 50000.0
+    },
+    "formatting_rules": {
+        "always_include_names": {
+            "entities": [
+                "CODUSU",
+                "CODVEND"
+            ],
+            "join_tables": {
+                "CODUSU": "TSIUSU (NOMEUSU)",
+                "CODVEND": "TGFVEND (APELIDO)"
+            },
+            "description": "Nunca exibir apenas o ID para usuários ou vendedores. Sempre realizar o JOIN para trazer o Nome ou Apelido correspondente."
+        }
+    },
+    "proposed_rules": [
+        {
+            "id": "clean_tax_adjustment",
+            "condition": "CODNAT = 3012200 AND VLRDESDOB > 5000",
+            "description": "Detectado valor alto em Auxílio Alimentação. Sugestão: Validar se este valor está correto ou se deve ser reclassificado.",
+            "status": "pending_approval"
+        }
+    ]
+}

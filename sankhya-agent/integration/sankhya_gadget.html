@@ -1,0 +1,107 @@
+<!-- 
+    GADGET HTML - SUPER AGENTE SANKHYA (SSA)
+    
+    Instruções de Instalação:
+    1. No Sankhya Om, vá em "Construtor de Telas" ou "Dashboards".
+    2. Crie um novo componente do tipo "HTML5" ou "Webview".
+    3. Cole este código no campo de conteúdo.
+    4. Substitua 'URL_DO_SEU_SSA' pelo endereço onde o Streamlit está rodando (ex: http://seuservernapontadaminhaempresa.com.br:8501).
+-->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .ssa-header {
+            background-color: #2E7D32; /* Verde Sankhya style */
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .ssa-title {
+            font-weight: 600;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .ssa-status {
+            font-size: 12px;
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        
+        #ssa-frame {
+            border: none;
+            width: 100%;
+            height: 100%;
+            flex-grow: 1;
+            background: white;
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #666;
+            font-size: 14px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ssa-header">
+        <div class="ssa-title">
+            🤖 Super Agente
+        </div>
+        <div class="ssa-status" id="connection-status">
+            Conectando...
+        </div>
+    </div>
+
+    <!-- O iframe carrega a interface do Streamlit -->
+    <!-- IMPORTANTE: O Streamlit deve permitir embed (configuração: enableCORS=false / enableXsrfProtection=false se necessário) -->
+    <iframe id="ssa-frame" src="http://localhost:8501/?embed=true" onload="statusOnline()" onerror="statusOffline()"></iframe>
+    
+    <div class="loading-overlay" id="loader">Carregando Inteligência...</div>
+
+    <script>
+        function statusOnline() {
+            document.getElementById('connection-status').innerText = 'Online 🟢';
+            document.getElementById('connection-status').style.background = '#4CAF50';
+            document.getElementById('loader').style.display = 'none';
+        }
+        
+        function statusOffline() {
+            document.getElementById('connection-status').innerText = 'Offline 🔴';
+            document.getElementById('connection-status').style.background = '#F44336';
+            document.getElementById('loader').innerText = 'Erro ao conectar no SSA Server.';
+        }
+        
+        // Listener para mensagens do Sankhya (se quisermos passar contexto da tela no futuro)
+        window.addEventListener('message', function(event) {
+            console.log('Mensagem do Sankhya:', event.data);
+            // Aqui poderíamos injetar o contexto (ex: nunota) na URL do iframe
+        });
+    </script>
+</body>
+</html>
