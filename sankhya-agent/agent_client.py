@@ -2,10 +2,11 @@ import os
 import json
 import logging
 import re
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
-from mcp_server.tools import register_tools, GLOBAL_TOOL_REGISTRY, get_openai_tools_schema
+from mcp_server.tools import register_tools, GLOBAL_TOOL_REGISTRY, get_gemini_tools_schema
 
 # Inicializa o registro de ferramentas (incluindo skills dinâmicas)
 register_tools()
@@ -13,9 +14,12 @@ register_tools()
 load_dotenv(override=True)
 logger = logging.getLogger("ssa-client")
 
-# Configuração da OpenAI
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key) if api_key else None
+# Configuração do Gemini
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key) if api_key else None
+
+# Modelo a ser utilizado nas chamadas ao Gemini
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def _run_auto_learning(function_name: str, function_args: dict, function_response: str, available_functions: dict) -> None:
@@ -92,40 +96,153 @@ def _retry_tool_if_recoverable(function_name: str, function_args: dict, function
         return function_response
 
 def get_system_prompt():
-    """Gera o prompt do sistema com a lista atual de ferramentas disponíveis."""
+    """Gera o prompt do sistema enriquecido com knowledge base e protocolo de resiliência."""
     tools_list = "\n".join([f"- `{name}`: {func.__doc__.strip().split('\\n')[0] if func.__doc__ else 'Sem descrição'}" 
                              for name, func in GLOBAL_TOOL_REGISTRY.items()])
     
     return f"""
-Você é o Sankhya Super Agent (SSA), um assistente especializado no ERP Sankhya.
-Sua missão é ajudar usuários (diretores, gerentes, suporte) a obter informações do sistema.
+Você é o Sankhya Super Agent (SSA), o assistente MAIS INTELIGENTE e PROATIVO do ERP Sankhya.
+Você serve a empresa "Portal Distribuidora / B&B". Seus usuários são diretores, gerentes e suporte.
 
-**Regras de Ouro:**
-1. **Segurança Primeiro:** Operações de escrita (criar/alterar/cancelar/faturar) são bloqueadas por padrão no SSA. Se o usuário pedir algo que altere dados, explique que não pode.
-2. **Contexto:** Use as ferramentas disponíveis para responder. Não invente dados.
-3. **Formatação:** As ferramentas retornam tabelas em Markdown. Repasse-as para o usuário.
-4. **Explicação:** Se uma query retornar vazio, sugira o motivo.
-5. **Business:** Você atua na empresa "Portal Distribuidora / B&B".
-6. **Relatórios diários:** Para pedidos de "vendas diárias", "vendas de hoje" ou "empresa X e Y", prefira a ferramenta `get_daily_sales_report` antes de SQL livre.
-7. **Multiempresa:** Em pedidos de indicadores/relatórios que dependem de empresa, sempre confirmar escopo (empresa específica ou todas). Se o usuário não escolher, responda com todas as empresas e explicite essa premissa.
-8. **SQL no Sankhya:** Nunca finalize SQL com ponto-e-vírgula (`;`). Gere apenas um único statement.
+═══════════════════════════════════════════
+ PERSONALIDADE: RESOLVA, NÃO PERGUNTE
+═══════════════════════════════════════════
 
-**Ferramentas Ativas no Momento:**
+Você é um RESOLVEDOR DE PROBLEMAS, não um robô passivo. Siga estas regras:
+
+1. **AÇÃO PRIMEIRO:** Quando o usuário pedir algo, FAÇA. Não peça confirmação.
+   - ❌ "De qual local você deseja o saldo?" → NÃO FAÇA ISSO. Use o padrão (CODLOCAL=10010000, CODEMP=1).
+   - ✅ Execute direto e retorne os dados. Se houver múltiplos locais, retorne TODOS.
+   - ❌ "Qual coluna deseja?" → NÃO FAÇA ISSO. Use `get_table_columns` para descobrir.
+   - ✅ Consulte o dicionário de dados e monte a query correta.
+
+2. **NUNCA INVENTE NOMES DE COLUNAS.** Se não souber a coluna exata:
+   - Use `get_table_columns(table_name)` ANTES de escrever SQL customizado.
+   - Ou use as ferramentas dedicadas (`get_stock_info`, `get_partner_info`, etc.) que já sabem os campos.
+
+3. **PREFIRA FERRAMENTAS DEDICADAS** antes de SQL livre:
+   - Estoque? → `get_stock_info(codprod)` (já inclui saldo, custo, marca)
+   - Parceiro? → `get_partner_info(codparc)`
+   - Nota? → `get_invoice_header(nunota)` + `get_invoice_items(nunota)`
+   - Vendas? → `get_daily_sales_report(days, codemp_csv)`
+   - Só use `run_sql_select` quando NÃO existir ferramenta dedicada.
+
+4. **RESPOSTAS RICAS e ANALÍTICAS:** Não devolva dados crus. Interprete:
+   - "O produto X tem saldo zero — pode indicar ruptura de estoque."
+   - "As vendas caíram 15% comparado à semana anterior."
+   - Ofereça INSIGHTS, não apenas tabelas.
+
+═══════════════════════════════════════════
+ PROTOCOLO DE RESILIÊNCIA (OODA LOOP)
+═══════════════════════════════════════════
+
+Quando receber um ERRO (ORA-xxxxx, HTTP 400/500, campo inválido), NUNCA desista:
+
+1. **OBSERVAR:** Capture o código de erro exato (ex: ORA-00904).
+2. **ORIENTAR:** Use `search_solutions(mensagem_do_erro)` para buscar na knowledge base.
+3. **DECIDIR:** Se a solução for clara, aplique. Se precisar de info, pergunte citando o artigo.
+4. **AGIR:** Corrija e re-execute. Só escale se após 2 tentativas não resolver.
+
+Erros comuns que você DEVE resolver sozinho:
+- `ORA-00904 (coluna inválida)` → Use `get_table_columns` para ver colunas reais e re-montar a query.
+- `ponto-e-vírgula detectado` → Remova `;` e re-execute.
+- `CURDATE/DATE_TRUNC` → Substitua por `TRUNC(SYSDATE)`, `SYSDATE`, `TO_CHAR` (Oracle).
+
+═══════════════════════════════════════════
+ CONHECIMENTO DO SCHEMA SANKHYA
+═══════════════════════════════════════════
+
+Parâmetros padrão da instância:
+- CODEMP = 1 (empresa padrão)
+- CODLOCAL = 10010000 (depósito principal)
+- TOP_ENTRADA = 221 | TOP_SAIDA = 1221
+
+Tabelas principais (Oracle — NUNCA use sintaxe MySQL):
+- TGFCAB: Cabeçalho de notas (NUNOTA, NUMNOTA, DTNEG, VLRNOTA, CODPARC, STATUSNOTA, TIPMOV, CODEMP)
+- TGFITE: Itens de notas (NUNOTA, SEQUENCIA, CODPROD, QTDNEG, VLRUNIT, VLRTOT)
+- TGFPRO: Produtos (CODPROD, DESCRPROD, MARCA, CODVOL, ATIVO, USOPROD, CODGRUPOPROD)
+- TGFEST: Estoque (CODPROD, CODLOCAL, CODEMP, ESTOQUE, CONTROLE)
+- TGFCUS: Custos (CODPROD, CODEMP, CUSREP, DHALTER)
+- TGFPAR: Parceiros (CODPARC, RAZAOSOCIAL, NOMEPARC, CGC_CPF, TIPPESSOA, CODCID, TELEFONE, EMAIL)
+- TGFTPV: Tipo de Operação/TOP (CODTIPOPER, DESCROPER, DHALTER)
+- TGFMBC: Conciliação bancária
+- TSIUSU: Usuários (CODUSU, NOMEUSU)
+- TSICID: Cidades (CODCID, NOMECID, UF)
+
+Funções SQL Oracle permitidas:
+- Data: SYSDATE, TRUNC(SYSDATE), TO_CHAR(data, 'formato'), ADD_MONTHS, MONTHS_BETWEEN
+- Texto: NVL, TRIM, UPPER, LOWER, SUBSTR, INSTR
+- Agregação: SUM, COUNT, AVG, MAX, MIN, ROUND
+- ⛔ NUNCA use: CURDATE, DATE_TRUNC, NOW(), ISNULL, GETDATE (são MySQL/Postgres/SQLServer!)
+
+Regras de negócio:
+- CUSREP (custo de reposição) vem de TGFCUS, não de TGFEST.
+- Coluna de estoque na TGFEST é "ESTOQUE" (não SALDOATU, não QTDESTOQUE).
+- STATUSNOTA: 'L' (liberada), 'P' (pendente), 'C' (cancelada).
+- TIPMOV: 'V' (venda), 'C' (compra), 'D' (devolução).
+
+═══════════════════════════════════════════
+ SEGURANÇA
+═══════════════════════════════════════════
+
+- JAMAIS execute UPDATE, DELETE, INSERT ou DROP via SQL. Use serviços de negócio.
+- Operações de escrita são bloqueadas por padrão. Se pedirem, explique a restrição.
+- Nunca finalize SQL com `;`. Apenas um statement por chamada.
+- Nunca use comentários SQL (`--` ou `/* */`).
+
+═══════════════════════════════════════════
+ FERRAMENTAS ATIVAS ({len(GLOBAL_TOOL_REGISTRY)})
+═══════════════════════════════════════════
+
 {tools_list}
 """
 
-# Schemas dinâmicos para a OpenAI
+# Schemas dinâmicos para o Gemini
 def get_tools_schema():
-    return get_openai_tools_schema()
+    return get_gemini_tools_schema()
 
 # Mapa de execução gerado dinamicamente
 def get_available_functions():
     return GLOBAL_TOOL_REGISTRY
 
 
+def _convert_messages_to_gemini(messages: list) -> list:
+    """
+    Converte mensagens no formato OpenAI (dicts com role/content) para
+    o formato Gemini (types.Content com parts).
+    """
+    contents = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        # Gemini só aceita 'user' e 'model' como roles
+        if role == "assistant":
+            role = "model"
+        elif role == "system":
+            # system_instruction é enviado separadamente na config
+            continue
+        elif role == "tool":
+            # Respostas de ferramentas não devem aparecer como mensagens normais
+            continue
+        elif role not in ("user", "model"):
+            role = "user"
+
+        if not content:
+            continue
+
+        contents.append(
+            types.Content(
+                role=role,
+                parts=[types.Part.from_text(text=content)]
+            )
+        )
+    return contents
+
+
 def run_simulation(last_message: str):
     """
-    Modo SIMULAÇÃO (Sem OpenAI):
+    Modo SIMULAÇÃO (Sem Gemini):
     Usa regras simples (regex) para detectar a intenção do usuário e chamar ferramentas.
     """
     msg = last_message.lower()
@@ -207,11 +324,11 @@ def run_simulation(last_message: str):
 def run_conversation(messages):
     """
     Gerencia o loop de conversa. 
-    Se não tiver cliente OpenAI configurado, usa o modo SIMULAÇÃO.
+    Se não tiver cliente Gemini configurado, usa o modo SIMULAÇÃO.
     """
     # Se não tem API Key, roda simulação local
     if not client:
-        # Garante hot-reload das skills mesmo sem OpenAI.
+        # Garante hot-reload das skills mesmo sem Gemini.
         register_tools()
         # Pega a última mensagem do usuário na lista
         for m in reversed(messages):
@@ -221,9 +338,9 @@ def run_conversation(messages):
         else:
             last_msg = ""
             
-        return f"**[MODO SIMULAÇÃO - SEM OPENAI KEY]**\n\n" + str(run_simulation(last_msg))
+        return f"**[MODO SIMULAÇÃO - SEM GEMINI KEY]**\n\n" + str(run_simulation(last_msg))
 
-    # Fluxo OpenAI Real
+    # Fluxo Gemini Real
     try:
         # Hot-reload real: sempre reindexa ferramentas/skills antes de cada rodada.
         register_tools()
@@ -232,36 +349,62 @@ def run_conversation(messages):
         tools_schema = get_tools_schema()
         available_functions = get_available_functions()
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": system_prompt}] + messages,
-            tools=tools_schema,
-            tool_choice="auto"
+        # Configura as ferramentas no formato Gemini
+        gemini_tools = types.Tool(function_declarations=tools_schema)
+        config = types.GenerateContentConfig(
+            tools=[gemini_tools],
+            system_instruction=system_prompt,
+        )
+
+        # Converte mensagens para o formato Gemini
+        contents = _convert_messages_to_gemini(messages)
+
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=config,
         )
         
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
+        # Loop multi-turn de tool calling (OODA loop).
+        # Permite ao modelo chamar ferramentas várias vezes em sequência,
+        # corrigindo erros e investigando schemas antes de responder.
+        MAX_TOOL_ROUNDS = 5
+        for _round in range(MAX_TOOL_ROUNDS):
+            # Verifica se o modelo solicitou chamada de ferramentas
+            response_parts = response.candidates[0].content.parts
+            function_calls = [p for p in response_parts if p.function_call and p.function_call.name]
 
-        if tool_calls:
-            # Adiciona a intenção do assistente ao histórico
-            messages.append(response_message) 
+            if not function_calls:
+                # Sem tool call — resposta final de texto
+                break
 
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
+            # Adiciona a resposta do modelo (com os function_calls) ao histórico
+            contents.append(response.candidates[0].content)
+
+            # Processa cada chamada de ferramenta
+            function_response_parts = []
+            for fc_part in function_calls:
+                function_name = fc_part.function_call.name
+                function_args = dict(fc_part.function_call.args) if fc_part.function_call.args else {}
                 
                 tool_function = available_functions.get(function_name)
                 if not tool_function:
+                    function_response_parts.append(
+                        types.Part.from_function_response(
+                            name=function_name,
+                            response={"error": f"Ferramenta '{function_name}' não encontrada."},
+                        )
+                    )
                     continue
                 
-                print(f"🛠️ Executando: {function_name}({function_args})")
+                print(f"🛠️ Executando [{_round+1}/{MAX_TOOL_ROUNDS}]: {function_name}({function_args})")
                 
                 try:
                     function_response = tool_function(**function_args)
                 except Exception as e:
                     function_response = f"Erro na execução da ferramenta: {str(e)}"
 
-                # Se der erro recuperável, tenta corrigir e reexecutar sem expor o erro bruto ao usuário.
+                # Se der erro recuperável, tenta corrigir e reexecutar
                 function_response = _retry_tool_if_recoverable(
                     function_name=function_name,
                     function_args=function_args,
@@ -269,42 +412,47 @@ def run_conversation(messages):
                     tool_function=tool_function,
                 )
 
-                # Aprendizado automático pós-execução de ferramenta.
+                # Aprendizado automático pós-execução de ferramenta
                 _run_auto_learning(function_name, function_args, str(function_response), available_functions)
 
-                messages.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": str(function_response),
-                })
+                function_response_parts.append(
+                    types.Part.from_function_response(
+                        name=function_name,
+                        response={"result": str(function_response)},
+                    )
+                )
 
-            second_response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": system_prompt}] + messages
+            # Envia resultados das ferramentas de volta ao modelo
+            contents.append(types.Content(role="user", parts=function_response_parts))
+
+            # O modelo pode decidir chamar MAIS ferramentas (OODA loop) ou gerar resposta final
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=config,
             )
-            return second_response.choices[0].message.content
 
-        return response_message.content
+        # Sem chamada de ferramenta — retorna texto direto
+        return response.text
 
     except Exception as e:
         error_msg = str(e)
 
-        # Mensagens mais acionáveis no UI (gadget) quando a OpenAI falha.
-        if "429" in error_msg or "insufficient_quota" in error_msg:
+        # Mensagens mais acionáveis no UI quando o Gemini falha.
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
             fallback_prefix = (
-                "⚠️ **[MODO FALLBACK - QUOTA OPENAI EXCEDIDA]**\n\n"
-                "Sua conta OpenAI atingiu limite de uso/créditos. Ajuste billing/limites e tente novamente.\n\n"
+                "⚠️ **[MODO FALLBACK - QUOTA GEMINI EXCEDIDA]**\n\n"
+                "Sua API Key Gemini atingiu o limite de uso. Verifique billing/limites e tente novamente.\n\n"
             )
-        elif "401" in error_msg or "invalid_api_key" in error_msg:
+        elif "401" in error_msg or "403" in error_msg or "API_KEY_INVALID" in error_msg:
             fallback_prefix = (
-                "⚠️ **[MODO FALLBACK - OPENAI NAO AUTENTICOU]**\n\n"
-                "A `OPENAI_API_KEY` parece invalida/sem permissao. Verifique a chave e o modelo configurado.\n\n"
+                "⚠️ **[MODO FALLBACK - GEMINI NAO AUTENTICOU]**\n\n"
+                "A `GEMINI_API_KEY` parece inválida ou sem permissão. Verifique a chave configurada.\n\n"
             )
         else:
-            fallback_prefix = f"⚠️ **[MODO FALLBACK - ERRO OPENAI]**\n\n*Erro: {error_msg}*\n\n"
+            fallback_prefix = f"⚠️ **[MODO FALLBACK - ERRO GEMINI]**\n\n*Erro: {error_msg}*\n\n"
 
-        logger.warning(f"Falha na OpenAI ({error_msg}). Entrando em modo FALLBACK (Simulação).")
+        logger.warning(f"Falha no Gemini ({error_msg}). Entrando em modo FALLBACK (Simulação).")
         # Fallback: Tenta extrair a última mensagem do usuário e rodar simulação
         last_user_msg = ""
         for m in reversed(messages):

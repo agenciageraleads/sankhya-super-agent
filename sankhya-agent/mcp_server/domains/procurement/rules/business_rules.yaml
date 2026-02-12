@@ -1,0 +1,29 @@
+# Configuração de Regras de Negócio - Compras
+# Define pesos e configurações para os algoritmos de decisão
+
+analysis:
+  safety_stock_days: 15     # Dias de estoque de segurança além do Lead Time
+  demand_buffer: 0.20       # 20% de margem de segurança na demanda (Treinamento)
+  abc_strategy:
+    A:
+      min_stock_coverage: 15 # Dias mínimos de cobertura para curva A
+      max_stock_coverage: 45
+    B:
+      min_stock_coverage: 10
+      max_stock_coverage: 30
+    C:
+      min_stock_coverage: 5
+      max_stock_coverage: 15
+
+margins:
+  retail: 0.28             # 28% para Varejo
+  wholesale: 0.25          # 25% para Atacado
+
+ranking:
+  price_weight: 0.6          # 60% peso preço
+  deadline_weight: 0.3       # 30% peso prazo
+  reliability_weight: 0.1    # 10% peso confiabilidade fornecedor
+
+alternatives:
+  strategy: "brand_group"    # Estratégia de busca de alternativos (brand_group, tgfpro_field, custom_sql)
+  custom_sql_path: "queries_alternatives.sql" # Se strategy for custom_sql

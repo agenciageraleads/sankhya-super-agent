@@ -1,4 +1,3 @@
-.DS_Store
 
 # Secrets
 .env
@@ -11,5 +10,35 @@ __pycache__/
 *.py[cod]
 .venv/
 
-# Logs
+# Log
 logs/
+activity.log
+*.log
+
+# Database and Knowledge (Sensitive / Volatile)
+knowledge.db
+knowledge/knowledge.db
+mcp_server/knowledge.db
+knowledge/active_alerts.json
+active_alerts.json
+*.db
+*.sqlite
+
+# Data Outputs
+outputs/
+*.xlsx
+*.csv
+*.xls
+
+# Media / Training Data (Large Files)
+*.mov
+*.mp4
+*.avi
+*.pptx
+*.ppt
+*.pdf
+training/
+*/training/*
+
+# OS
+.DS_Store

@@ -1,0 +1,18 @@
+-- Query 3: Produtos específicos comprados por Fornecedor
+SELECT
+    pro.CODPROD,
+    pro.DESCRPROD,
+    pro.MARCA,
+    SUM(ite.QTDNEG)   AS QTD,
+    SUM(ite.VLRTOT)   AS VLRTOT,
+    COUNT(DISTINCT cab.NUNOTA) AS QTD_PEDIDOS
+FROM TGFITE ite
+JOIN TGFCAB cab ON cab.NUNOTA = ite.NUNOTA
+JOIN TGFPRO pro ON pro.CODPROD = ite.CODPROD
+WHERE cab.CODPARC = :CODPARC
+  AND cab.DTNEG  BETWEEN :INI AND :FIN
+  AND cab.TIPMOV = 'C'
+  AND cab.CODTIPOPER IN (200,227)
+  AND cab.CODEMP IN (:EMPRESA)
+GROUP BY pro.CODPROD, pro.DESCRPROD, pro.MARCA
+ORDER BY pro.DESCRPROD

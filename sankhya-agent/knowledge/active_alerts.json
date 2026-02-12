@@ -1,4 +1,0 @@
-{
-  "last_run": "10/02/2026 23:35:15",
-  "report": "### 🚨 Painel de Alertas Proativos\n\n🟡 **Notas Pendentes**: 3 ocorrência(s)\n_Notas que foram digitadas mas não confirmadas nos últimos 7 dias._\n\n| NUNOTA | CODPARC | VLRNOTA |\n| --- | --- | --- |\n| 197778 | 53 | 2166.5 |\n| 198464 | 1991 | 5895.86 |\n| 197884 | 0 | 0 |\n\n🔴 **Estoque Crítico**: 1839 ocorrência(s)\n_Produtos ativos com menos de 5 unidades em estoque._\n\n| CODPROD | ESTOQUE |\n| --- | --- |\n| 5281 | 2 |\n| 5287 | 4 |\n| 5301 | 0 |\n| 5316 | 2 |\n| 5360 | 2 |"
-}

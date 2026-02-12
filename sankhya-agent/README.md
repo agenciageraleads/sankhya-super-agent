@@ -13,15 +13,11 @@
 - **Auditoria:** Logs em `logs/activity.log`
 - **Knowledge Base:** Documentação da API e Schema Map
 
-## Estrutura do Projeto 📂
+## Fase 3: Interface de Chat (Concluída)
 
-- `app.py`: Interface Streamlit (Entry point)
-- `agent_client.py`: Lógica do cliente OpenAI e orquestração de ferramentas
-- `mcp_server/`: Servidor de ferramentas e lógica core do Sankhya
-- `knowledge/`: Dicionário de dados e base de conhecimento
-- `scripts/`: Scripts de utilidade e indexação
-- `tests/`: Scripts de teste e validação
-- `logs/`: Logs de auditoria e atividades
+- **UI:** Interface Web construída com Streamlit (`app.py`)
+- **Cérebro:** Cliente Gemini (`agent_client.py`) que decide quais ferramentas usar
+- **Fluxo:** Pergunta -> LLM -> Tool Call -> Resposta Formatada
 
 ## Fase 4: Inteligência de Negócio & BI (Concluída)
 
@@ -40,11 +36,15 @@
 
 ---
 
-## Fase 3: Interface de Chat (Concluída)
+## Estrutura do Projeto 📂
 
-- **UI:** Interface Web construída com Streamlit (`app.py`)
-- **Cérebro:** Cliente OpenAI (`agent_client.py`) que decide quais ferramentas usar
-- **Fluxo:** Pergunta -> LLM -> Tool Call -> Resposta Formatada
+- `app.py`: Interface Streamlit (Entry point)
+- `agent_client.py`: Lógica do cliente Gemini e orquestração de ferramentas
+- `mcp_server/`: Servidor de ferramentas e lógica core do Sankhya
+- `knowledge/`: Dicionário de dados e base de conhecimento
+- `scripts/`: Scripts de utilidade e indexação
+- `tests/`: Scripts de teste e validação
+- `logs/`: Logs de auditoria e atividades
 
 ---
 
@@ -52,14 +52,14 @@
 
 ### 1. Configurar Chaves
 
-Certifique-se de que o `.env` possui as credenciais do Sankhya e a chave da OpenAI:
+Certifique-se de que o `.env` possui as credenciais do Sankhya e a chave do Gemini:
 
 ```ini
 SANKHYA_API_URL=https://api.sankhya.com.br
 SANKHYA_CLIENT_ID=...
 SANKHYA_CLIENT_SECRET=...
 SANKHYA_X_TOKEN=...
-OPENAI_API_KEY=sk-...  <-- Adicione sua chave aqui
+GEMINI_API_KEY=AIza...  <-- Adicione sua chave aqui
 ```
 
 ### 2. Iniciar a Interface

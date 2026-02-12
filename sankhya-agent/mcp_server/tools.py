@@ -743,20 +743,20 @@ def register_tools(mcp=None):
         except Exception as e:
             logger.error(f"Erro ao carregar skill {module_name}: {str(e)}")
 
-def get_openai_tools_schema() -> List[Dict]:
-    """Gera o schema da OpenAI baseado nas ferramentas registradas."""
-    schemas = []
+def get_gemini_tools_schema() -> List[Dict]:
+    """Gera declarações de função no formato Gemini baseado nas ferramentas registradas."""
+    declarations = []
     for name, func in GLOBAL_TOOL_REGISTRY.items():
-        # Gera schema básico baseado na assinatura e docstring
+        # Gera schema baseado na assinatura e docstring
         sig = inspect.signature(func)
         params = {
             "type": "object",
             "properties": {},
             "required": []
         }
-        
+
         for p_name, p_param in sig.parameters.items():
-            # Simplificação: assume string/int baseado no nome ou default
+            # Inferência de tipo baseada na annotation ou convenção de nome
             p_type = "string"
             if p_param.annotation == int or p_name.startswith("cod") or p_name.startswith("nu"):
                 p_type = "integer"
@@ -765,22 +765,19 @@ def get_openai_tools_schema() -> List[Dict]:
 
             prop_schema = {
                 "type": p_type,
-                "description": f"Parâmetro {p_name}"  # Idealmente extrair do docstring
+                "description": f"Parâmetro {p_name}"
             }
-            # OpenAI exige "items" quando o tipo é array.
+            # Gemini também exige "items" quando o tipo é array.
             if p_type == "array":
                 prop_schema["items"] = {"type": "string"}
 
             params["properties"][p_name] = prop_schema
             if p_param.default == inspect.Parameter.empty:
                 params["required"].append(p_name)
-        
-        schemas.append({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": (func.__doc__ or "Sem descrição").strip().split("\n")[0],
-                "parameters": params
-            }
+
+        declarations.append({
+            "name": name,
+            "description": (func.__doc__ or "Sem descrição").strip().split("\n")[0],
+            "parameters": params
         })
-    return schemas
+    return declarations

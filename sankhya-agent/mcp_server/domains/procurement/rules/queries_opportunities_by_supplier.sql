@@ -1,0 +1,34 @@
+WITH FornecedoresReais AS (
+    -- Descobre quem é o PRINCIPAL fornecedor (Maior Volume nos últimos 24 meses)
+    SELECT CODPROD, CODPARC
+    FROM (
+        SELECT 
+            ITE.CODPROD, 
+            CAB.CODPARC,
+            SUM(ITE.QTDNEG) as VOLUME_TOTAL,
+            ROW_NUMBER() OVER (PARTITION BY ITE.CODPROD ORDER BY SUM(ITE.QTDNEG) DESC) as RN
+        FROM TGFITE ITE
+        JOIN TGFCAB CAB ON ITE.NUNOTA = CAB.NUNOTA
+        WHERE CAB.TIPMOV = 'O' 
+          AND CAB.STATUSNOTA = 'L'
+          AND CAB.DTNEG > ADD_MONTHS(SYSDATE, -24)
+        GROUP BY ITE.CODPROD, CAB.CODPARC
+    ) WHERE RN = 1
+)
+-- Agrupamento de Oportunidades por Fornecedor (Baseado em Histórico de Compras Real)
+-- Cria uma visão de quem FORNECE o produto, cruzando a sugestão de giro com histórico de notas
+SELECT 
+    F.CODPARC AS CODPARCFORN,
+    PAR.NOMEPARC AS FORNECEDOR,
+    SUM(G.SUGCOMPRA * G.CUSTOGER) AS VLR_TOTAL_SUGESTAO,
+    COUNT(DISTINCT G.CODPROD) AS MIX_PRODUTOS,
+    COUNT(DISTINCT CASE WHEN G.ESTOQUE = 0 THEN G.CODPROD END) AS ITENS_RUPTURA
+FROM TGFGIR G
+JOIN FornecedoresReais F ON G.CODPROD = F.CODPROD
+JOIN TGFPAR PAR ON F.CODPARC = PAR.CODPARC
+WHERE G.CODREL = :CODREL
+  AND G.CODEMP IN (1, 5)
+  AND G.SUGCOMPRA > 0
+  AND F.CODPARC NOT IN (1, 5) -- Exclui autopreenchimento (Matriz/Filial)
+GROUP BY F.CODPARC, PAR.NOMEPARC
+ORDER BY VLR_TOTAL_SUGESTAO DESC
