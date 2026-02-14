@@ -27,3 +27,45 @@ ranking:
 alternatives:
   strategy: "brand_group"    # Estratégia de busca de alternativos (brand_group, tgfpro_field, custom_sql)
   custom_sql_path: "queries_alternatives.sql" # Se strategy for custom_sql
+
+# Lead Time Dinâmico
+leadtime:
+  fallback_strategy:
+    - historical_6mo      # Prioridade 1: Histórico 6 meses
+    - supplier_category   # Prioridade 2: Média da categoria do fornecedor
+    - static_gir          # Prioridade 3: TGFGIR.LEADTIME
+    - default_30_days     # Prioridade 4: Default conservador
+
+  outlier_filter:
+    min_days: 0           # Rejeitar entregas negativas
+    max_days: 180         # Rejeitar entregas > 6 meses
+
+  minimum_samples: 2      # Mínimo de entregas para validade estatística
+
+  temporal_weights:
+    last_3_months: 0.7    # Últimos 3 meses = 70% do peso
+    months_3_to_6: 0.3    # 3-6 meses = 30% do peso
+
+# Controle de Budget (CMV-based)
+budget_control:
+  enabled: true
+  growth_factor_annual: 0.20     # 20% de crescimento anual esperado
+
+  allocation_strategy:
+    method: "margin_weighted"     # Distribuição por margem
+    exploration_reserve: 0.05     # 5% reservado para novos fornecedores
+
+  enforcement:
+    mode: "hard_cap"              # HARD CAP: bloqueia compras que excedam
+    override_permission: "GERENTE_COMPRAS"
+
+  margin_calculation:
+    minimum_margin: 0.05          # Excluir fornecedores com margem < 5%
+    lookback_period_months: 6     # Calcular margem dos últimos 6 meses
+    volume_weight_factor: "sqrt"  # Fator de volume: raiz quadrada
+
+# Validações
+validation:
+  require_leadtime_source: true   # Exibir fonte do lead time
+  block_negative_margin_purchases: true
+  alert_threshold_budget_usage: 0.80     # Alertar quando fornecedor usar 80% do budget

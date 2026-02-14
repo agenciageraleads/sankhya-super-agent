@@ -275,6 +275,8 @@ class SankhyaProcurementService:
             filter_clause = "AND P.MARCA = :TARGET"
         elif target_type == 'MACRO_GRUPO':
             filter_clause = "AND GRU.AD_CATMACRO = :TARGET"
+        elif target_type == 'GRUPO':
+            filter_clause = "AND GRU.DESCRGRUPOPROD LIKE '%' || :TARGET || '%'"
             
         sql = f"""
             SELECT 
@@ -282,6 +284,7 @@ class SankhyaProcurementService:
                 MAX(P.DESCRPROD) AS DESCRPROD,
                 MAX(P.MARCA) AS MARCA,
                 MAX(GRU.AD_CATMACRO) AS MACRO_GRUPO,
+                MAX(GRU.DESCRGRUPOPROD) AS GRUPO,
                 SUM(G.SUGCOMPRA) AS SUGCOMPRA,
                 MAX(G.CUSTOGER) AS CUSTOGER,
                 SUM(G.GIRODIARIO) AS GIRODIARIO,
@@ -344,3 +347,158 @@ class SankhyaProcurementService:
         except Exception as e:
             logger.error(f"Erro ao buscar alternativos para {codprod}: {e}")
             return []
+
+    # === NOVOS MÉTODOS: Lead Time Dinâmico ===
+
+    def get_supplier_leadtime_history(self, codparc: int, codprod: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Histórico de lead time do fornecedor.
+        Retorna estatísticas de entregas reais (pedido → nota fiscal).
+        """
+        sql = self._read_sql("queries_leadtime_history.sql")
+        params = {"CODPARC": codparc, "CODPROD": codprod}
+        return self._execute_with_params(sql, params)
+
+    def get_effective_leadtime(self, codprod: int, codparc: int) -> Dict[str, Any]:
+        """
+        Lead time efetivo com estratégia de fallback.
+        Priority: Histórico → Categoria → Estático → Default (30d)
+        """
+        sql = self._read_sql("queries_leadtime_effective.sql")
+        params = {"CODPROD": codprod, "CODPARC": codparc}
+        results = self._execute_with_params(sql, params)
+
+        if results:
+            return {
+                "leadtime_dias": float(results[0]["LEADTIME_EFETIVO"]),
+                "fonte": results[0]["FONTE_LEADTIME"],
+                "confiavel": results[0]["FONTE_LEADTIME"] in ["HISTORICO", "CATEGORIA"]
+            }
+        return {"leadtime_dias": 30, "fonte": "DEFAULT", "confiavel": False}
+
+    # === NOVOS MÉTODOS: CMV Budget Control ===
+
+    def get_cmv_previous_month(self, codemp: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Calcula CMV (Custo de Mercadoria Vendida) do mês anterior.
+        Base para orçamento de compras do mês atual.
+        """
+        sql = self._read_sql("queries_cmv_previous_month.sql")
+        try:
+            results = sankhya.execute_query(sql)
+            if codemp:
+                results = [r for r in results if r.get("CODEMP") == codemp]
+
+            total_cmv = sum(float(r.get("CMV_TOTAL", 0)) for r in results)
+
+            return {
+                "cmv_mes_anterior": total_cmv,
+                "detalhamento_empresas": results,
+                "itens_vendidos": sum(int(r.get("ITENS_VENDIDOS", 0)) for r in results)
+            }
+        except Exception as e:
+            logger.error(f"Erro ao calcular CMV: {e}")
+            return {"cmv_mes_anterior": 0, "detalhamento_empresas": [], "itens_vendidos": 0}
+
+    def get_supplier_margin_index(self, codparc: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Calcula índice de margem por fornecedor.
+        Maior índice = maior prioridade para alocação de budget.
+        """
+        sql = self._read_sql("queries_supplier_margin_index.sql")
+        params = {"CODPARC": codparc}
+        return self._execute_with_params(sql, params)
+
+    def calculate_purchase_budget_allocation(self, growth_factor: float = 0.20) -> Dict[str, Any]:
+        """
+        Calcula orçamento global e distribui entre fornecedores.
+
+        Args:
+            growth_factor: Crescimento anual esperado (default: 20% = 0.20)
+
+        Returns:
+            {
+                "orcamento_global": float,
+                "cmv_base": float,
+                "fator_crescimento_mensal": str,
+                "alocacao_fornecedores": List[Dict],
+                "reserva_exploracao": float
+            }
+        """
+        # Calcular CMV base
+        cmv_data = self.get_cmv_previous_month()
+        cmv_base = cmv_data["cmv_mes_anterior"]
+
+        # Crescimento mensal composto: (1 + 0.20)^(1/12) - 1 ≈ 0.0167
+        monthly_rate = ((1 + growth_factor) ** (1/12)) - 1
+        budget_total = cmv_base * (1 + monthly_rate)
+
+        # Buscar alocações por fornecedor
+        sql_allocation = self._read_sql("queries_budget_allocation.sql")
+        try:
+            allocations = sankhya.execute_query(sql_allocation)
+        except Exception as e:
+            logger.error(f"Erro ao calcular alocação de budget: {e}")
+            allocations = []
+
+        return {
+            "orcamento_global": round(budget_total, 2),
+            "cmv_base": round(cmv_base, 2),
+            "fator_crescimento_anual": f"{growth_factor * 100}%",
+            "fator_crescimento_mensal": f"{monthly_rate * 100:.2f}%",
+            "fonte_calculo": "CMV mês anterior × 1.0167",
+            "alocacao_fornecedores": allocations,
+            "reserva_exploracao": round(budget_total * 0.05, 2)
+        }
+
+    def validate_purchase_against_budget(self, codparc: int, valor_compra: float) -> Dict[str, Any]:
+        """
+        HARD CAP: Valida se compra pode ser realizada dentro do orçamento alocado.
+
+        Returns:
+            {
+                "aprovado": bool,
+                "orcamento_disponivel": float,
+                "valor_solicitado": float,
+                "mensagem": str
+            }
+        """
+        # 1. Buscar orçamento alocado do fornecedor
+        budget_data = self.calculate_purchase_budget_allocation()
+        supplier_allocations = {
+            int(a["CODPARC"]): float(a["ORCAMENTO_ALOCADO"])
+            for a in budget_data["alocacao_fornecedores"]
+        }
+
+        # 2. Buscar gastos acumulados no mês atual
+        sql_spent = """
+            SELECT SUM(ITE.VLRTOT) AS GASTO_ACUMULADO
+            FROM TGFCAB CAB
+            JOIN TGFITE ITE ON CAB.NUNOTA = ITE.NUNOTA
+            WHERE CAB.CODPARC = :CODPARC
+              AND CAB.TIPMOV = 'O'
+              AND CAB.STATUSNOTA = 'L'
+              AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
+        """
+        spent_results = self._execute_with_params(sql_spent, {"CODPARC": codparc})
+        gasto_acumulado = float(spent_results[0].get("GASTO_ACUMULADO", 0)) if spent_results else 0
+
+        # 3. Calcular disponível
+        orcamento_fornecedor = supplier_allocations.get(codparc, budget_data["reserva_exploracao"])
+        disponivel = orcamento_fornecedor - gasto_acumulado
+        aprovado = (valor_compra <= disponivel)
+        percentual_utilizado = ((gasto_acumulado + valor_compra) / orcamento_fornecedor * 100) if orcamento_fornecedor > 0 else 0
+
+        return {
+            "aprovado": aprovado,
+            "orcamento_alocado": round(orcamento_fornecedor, 2),
+            "gasto_acumulado": round(gasto_acumulado, 2),
+            "orcamento_disponivel": round(disponivel, 2),
+            "valor_solicitado": round(valor_compra, 2),
+            "percentual_utilizado": round(percentual_utilizado, 1),
+            "mensagem": (
+                f"✅ APROVADO: R$ {valor_compra:,.2f} dentro do limite (disponível: R$ {disponivel:,.2f})"
+                if aprovado else
+                f"❌ BLOQUEADO: R$ {valor_compra:,.2f} excede orçamento de R$ {disponivel:,.2f}"
+            )
+        }

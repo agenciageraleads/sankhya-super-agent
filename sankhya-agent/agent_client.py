@@ -7,6 +7,7 @@ from google.genai import types
 from dotenv import load_dotenv
 
 from mcp_server.tools import register_tools, GLOBAL_TOOL_REGISTRY, get_gemini_tools_schema
+from mcp_server.skills.development_orchestrator import get_orchestrator
 
 # Inicializa o registro de ferramentas (incluindo skills dinâmicas)
 register_tools()
@@ -143,6 +144,11 @@ Quando receber um ERRO (ORA-xxxxx, HTTP 400/500, campo inválido), NUNCA desista
 3. **DECIDIR:** Se a solução for clara, aplique. Se precisar de info, pergunte citando o artigo.
 4. **AGIR:** Corrija e re-execute. Só escale se após 2 tentativas não resolver.
 
+Se a solução não for óbvia ou o erro persistir:
+- 🌍 **CONSULTE A AJUDA EXTERNA:** Use `search_zendesk_help_center(erro_ou_duvida)` para buscar soluções oficiais em tempo real.
+- Se encontrar um artigo relevante, **leia-o** e aplique a solução.
+- Se nada funcionar, sugira ao usuário: "Verifique na Comunidade Sankhya (comunidade.sankhya.com.br) ou abra um chamado."
+
 Erros comuns que você DEVE resolver sozinho:
 - `ORA-00904 (coluna inválida)` → Use `get_table_columns` para ver colunas reais e re-montar a query.
 - `ponto-e-vírgula detectado` → Remova `;` e re-execute.
@@ -195,6 +201,46 @@ Regras de negócio:
 ═══════════════════════════════════════════
 
 {tools_list}
+
+═══════════════════════════════════════════
+ 🤖 DESENVOLVIMENTO DO SISTEMA (META-MODE)
+═══════════════════════════════════════════
+
+IMPORTANTE: Você também atua como desenvolvedor do próprio Sankhya Super Agent.
+
+**DETECÇÃO DE CONTEXTO:**
+Antes de responder, identifique se a mensagem é sobre:
+
+1. **SANKHYA RUNTIME** (uso do sistema Sankhya):
+   - Consultas: "mostre estoque", "liste vendas", "busque parceiro"
+   - Entidades: TGFPRO, TGFCAB, produtos, notas, estoque
+   - SQL/Queries diretos
+   → Use ferramentas Sankhya normalmente
+
+2. **SYSTEM DEVELOPMENT** (desenvolver/melhorar este sistema):
+   - "adicione feature", "crie skill", "melhore código"
+   - "corrija bug no agent_client", "refatore orchestrator"
+   - Referências a arquivos: agent_client.py, mcp_server/, .agent/
+   → Ative DEVELOPMENT MODE
+
+═══════════════════════════════════════════
+ DEVELOPMENT MODE RULES (quando ativo)
+═══════════════════════════════════════════
+
+{get_orchestrator().get_core_skills_context()}
+
+🔴 **SELF-CHECK ANTES DE COMPLETAR (MANDATORY)**
+
+Antes de dizer "tarefa completa", verificar:
+✅ Meta atingida? - Fiz exatamente o que foi pedido?
+✅ Arquivos editados? - Modifiquei todos os necessários?
+✅ Código funciona? - Testei/verifiquei a mudança?
+✅ Sem erros? - Lint e type checking passam?
+✅ Nada esquecido? - Algum edge case perdido?
+
+🔴 REGRA: Se QUALQUER check falhar, corrija antes de completar.
+
+═══════════════════════════════════════════
 """
 
 # Schemas dinâmicos para o Gemini
@@ -344,8 +390,37 @@ def run_conversation(messages):
     try:
         # Hot-reload real: sempre reindexa ferramentas/skills antes de cada rodada.
         register_tools()
+
+        # Detectar contexto: Sankhya runtime vs System development
+        orchestrator = get_orchestrator()
+        last_user_message = ""
+        for m in reversed(messages):
+            if m["role"] == "user":
+                last_user_message = m["content"]
+                break
+
+        activate_dev_mode, context, active_skills = orchestrator.should_activate_development_mode(last_user_message)
+
         # Pede os schemas e mapas atuais (suporta Hot Reload)
         system_prompt = get_system_prompt()
+
+        # Se modo desenvolvimento ativo, adicionar contexto de skills específicas
+        if activate_dev_mode and active_skills:
+            skills_context = orchestrator.get_skills_context(active_skills)
+            system_prompt += f"""
+
+═══════════════════════════════════════════
+ 🎯 ACTIVE DEVELOPMENT SKILLS (AUTO-DETECTED)
+═══════════════════════════════════════════
+
+Contexto detectado: {context}
+Skills ativas: {', '.join(active_skills)}
+
+{skills_context}
+
+💡 **APPLY THESE SKILLS**: Use as diretrizes acima ao trabalhar nesta tarefa.
+"""
+
         tools_schema = get_tools_schema()
         available_functions = get_available_functions()
 
